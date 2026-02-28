@@ -56,7 +56,6 @@ while 1:
                     cv2.rectangle(pupilFrame, (x - 5, y - 5), (x + 5, y + 5), (0, 128, 255), -1)
                     thresholding(x)
 
-        # frame = cv2.medianBlur(frame,5)
         cv2.imshow('image', pupilFrame)
         cv2.imshow('clahe', clahe)
         cv2.imshow('blur', blur)
