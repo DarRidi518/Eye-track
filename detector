@@ -1,65 +1,174 @@
 import numpy as np
 import cv2
+from PyQt5 import QtWidgets, QtCore
+import sys
+import threading
+import time
 
+
+def ensure_qt_app():
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+    return app
+
+# Глобальные параметры и состояния
 cap = cv2.VideoCapture(0)
 left_counter = 0
 right_counter = 0
 
 th_value = 5
+NO_EYES_MAX_FRAMES = 60      # сколько кадров без обнаружения глаз допустимо
+warning_shown = False         # не показываем повторно одно и то же окно
+no_eyes_frames = 0              # счетчик кадров без обнаружения глаз
 
-def thresholding(value):
-    global left_counter
-    global right_counter
+# Флаг уведомления, что пользователь закрыл окно
+warning_closed_by_user = False
 
-    if (value <= 54):
-        left_counter = left_counter + 1
+# Управление завершением программы, если предупреждение проигнорировано
+GIVEUP_AFTER_FRAMES = 100        # кадров после предупреждения до выхода
+giveup_frames = 0                  # счетчик кадров после предупреждения
 
-        if (left_counter > th_value):
-            print('RIGHT')
-            left_counter = 0
+# Иммутабельная функция показа окна предупреждения (в отдельном потоке)
+def show_warning_window_pyqt(message):
+    app = ensure_qt_app()
 
-    elif (value >= 54):
-        right_counter = right_counter + 1
+    w = QtWidgets.QWidget()
+    w.setWindowTitle('Предупреждение')
+    w.setFixedSize(400, 120)
 
-        if (right_counter > th_value):
-            print('LEFT')
-            right_counter = 0
+    layout = QtWidgets.QVBoxLayout()
+    label = QtWidgets.QLabel(message)
+    label.setAlignment(QtCore.Qt.AlignCenter)
+    layout.addWidget(label)
+
+    btn = QtWidgets.QPushButton('Закрыть')
+    layout.addWidget(btn, alignment=QtCore.Qt.AlignCenter)
+
+    w.setLayout(layout)
+
+    def on_close_clicked():
+        global warning_closed_by_user
+        warning_closed_by_user = True
+        w.close()
+
+    btn.clicked.connect(on_close_clicked)
+
+    w.setWindowModality(QtCore.Qt.ApplicationModal)
+    w.show()
+
+    # Запуск обработчика событий до закрытия окна
+    while w.isVisible():
+        app.processEvents()
+        time.sleep(0.01)
+
+# Запуск предупреждения в отдельном потоке
+def trigger_warning_async():
+    threading.Thread(target=show_warning_window_pyqt, args=("У вас закрыты глаза!",), daemon=True).start()
+
+# Визуальная подпись на кадре (опционально)
 
 
-while 1:
+def debug_show_warning_text(frame, text):
+    cv2.putText(frame, text, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+# Главный цикл
+while True:
     ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Линии (визуал)
     cv2.line(frame, (320, 0), (320, 480), (0, 200, 0), 2)
     cv2.line(frame, (0, 200), (640, 200), (0, 200, 0), 2)
-    if ret == True:
-        col = frame
 
-        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        pupilFrame = frame
-        clahe = frame
-        blur = frame
-        edges = frame
+    # Обработка кадров
+    if ret:
+        col = frame.copy()
+
+        # Приведение к градациям серого
+        frame_gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        pupilFrame = frame_gray
+        clahe_img = frame_gray
+        blur_img = frame_gray
+        edges = frame_gray
+
+        # Загрузка каскада глаз
         eyes = cv2.CascadeClassifier('haarcascade_eye.xml')
-        detected = eyes.detectMultiScale(frame, 1.3, 5)
+        detected = eyes.detectMultiScale(frame_gray, 1.3, 5)
+
+        eyes_found_in_this_frame = False
         for (x, y, w, h) in detected:
-            cv2.rectangle(frame, (x, y), ((x + w), (y + h)), (0, 0, 255), 1)
-            cv2.line(frame, (x, y), ((x + w, y + h)), (0, 0, 255), 1)
-            cv2.line(frame, (x + w, y), ((x, y + h)), (0, 0, 255), 1)
-            pupilFrame = cv2.equalizeHist(frame)
+            eyes_found_in_this_frame = True
+            cv2.rectangle(frame_gray, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.line(frame_gray, (x, y), (x + w, y + h), (0, 0, 255), 1)
+            cv2.line(frame_gray, (x + w, y), (x, y + h), (0, 0, 255), 1)
+
+            # Пример обработки: можно локально применять гистограмму и окружности
+            pupilFrame = cv2.equalizeHist(frame_gray)
             cl1 = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-            circles = cv2.HoughCircles(blur, cv2.HOUGH_GRADIENT, 1, 20, param1=50, param2=30, minRadius=7,
-                                       maxRadius=21)
+            blurred_for_circles = cv2.GaussianBlur(frame_gray, (5, 5), 0)
+
+            # Поиск окружностей
+            circles = cv2.HoughCircles(blurred_for_circles, cv2.HOUGH_GRADIENT, 1, 20,
+                                       param1=50, param2=30, minRadius=7, maxRadius=21)
             if circles is not None:
                 circles = np.round(circles[0, :]).astype("int")
-                print('integer', circles)
-                for (x, y, r) in circles:
-                    cv2.circle(pupilFrame, (x, y), r, (0, 255, 255), 2)
-                    cv2.rectangle(pupilFrame, (x - 5, y - 5), (x + 5, y + 5), (0, 128, 255), -1)
-                    thresholding(x)
+                for (cx, cy, r) in circles:
+                    cv2.circle(pupilFrame, (cx, cy), r, (0, 255, 255), 2)
+                    cv2.rectangle(pupilFrame, (cx - 5, cy - 5), (cx + 5, cy + 5), (0, 128, 255), -1)
+                    thresholding(cx)
 
+        # Логика отсутствия глаз
+        if not (detected is None) and len(detected) > 0:
+            no_eyes_frames = 0
+        else:
+            no_eyes_frames += 1
+
+        # Флаг предупреждения
+        def thresholding(value):
+            global left_counter, right_counter, no_eyes_frames
+            if (value <= 54):
+                left_counter += 1
+                if (left_counter > th_value):
+                    print('RIGHT')
+                    left_counter = 0
+                    no_eyes_frames = 0
+            elif (value >= 54):
+                right_counter += 1
+                if (right_counter > th_value):
+                    print('LEFT')
+                    right_counter = 0
+                    no_eyes_frames = 0
+
+        # Предупреждение, если глаз не найден
+        if no_eyes_frames > NO_EYES_MAX_FRAMES:
+            if not warning_shown:
+                # Запускаем PyQt окно предупреждения в отдельном потоке
+                trigger_warning_async()
+                warning_shown = True
+                giveup_frames = 0  # начать отсчет после показа предупреждения
+
+            debug_show_warning_text(frame, "У вас закрыты глаза!")
+
+            # Если предупреждение было закрыто пользователем — можно сбросить флаги и продолжать
+            if warning_closed_by_user:
+                warning_closed_by_user = False
+                warning_shown = False
+                giveup_frames = 0
+
+            # Логика “сдать” по времени игнорирования
+            else:
+                giveup_frames += 1
+                if giveup_frames > GIVEUP_AFTER_FRAMES:
+                    print("Водитель спит!")
+                    break
+
+        # Рендер
         cv2.imshow('image', pupilFrame)
-        cv2.imshow('clahe', clahe)
-        cv2.imshow('blur', blur)
 
+        # Выход по клавише
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
