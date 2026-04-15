@@ -4,6 +4,91 @@ from PyQt5 import QtWidgets, QtCore
 import sys
 import threading
 import time
+import sqlite3
+import random
+import string
+import hashlib
+import tkinter as tk
+from tkinter import simpledialog, messagebox
+
+
+# Функция для генерации 16-ти значного кода
+def generate_code():
+    characters = string.digits + string.ascii_uppercase
+
+    blocks = []
+    for _ in range(4):
+        block = ''.join(random.choices(characters, k=4))
+        blocks.append(block)
+
+    return '-'.join(blocks)
+
+
+# База данных
+connection = sqlite3.connect("users.db")
+cursor = connection.cursor()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    login TEXT PRIMARY KEY,
+    hash TEXT
+)
+''')
+
+
+# Проверка пользователя
+def verify_code():
+    root = tk.Tk()
+    root.withdraw()
+
+    generated_code = generate_code()
+    print("Ваш код:", generated_code)
+
+    user_code = simpledialog.askstring("Ввод кода",
+                                         "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
+                                         parent=root)
+
+    user_login = simpledialog.askstring("Ввод логина",
+                                         "Введите ваш логин:",
+                                         parent=root)
+
+    if user_code and user_login:
+        # Хэшируем код пользователя
+        user_code_hash = hashlib.sha256(user_code.encode()).hexdigest()
+
+        # Проверяем, существует ли пользователь
+        cursor.execute("SELECT hash FROM users WHERE login = ?", (user_login,))
+        result = cursor.fetchone()
+
+        if result:
+            # Если пользователь уже существует, проверяем хэш кода
+            stored_code_hash = result[0]
+            if user_code_hash == stored_code_hash:  # Сравниваем хэши
+                messagebox.showinfo("Успех!",
+                                    f"Код верный!\n\nЛогин: {user_login}\nДоступ разрешен.")
+            else:
+                messagebox.showerror("Ошибка",
+                                     "Неверный код подтверждения!\nДоступ запрещен.")
+        else:
+            # Если пользователь не существует, добавляем его
+            code_hash = hashlib.sha256(generated_code.encode()).hexdigest()
+            try:
+                cursor.execute("INSERT INTO users (login, hash) VALUES (?, ?)", (user_login, code_hash))
+                connection.commit()
+                messagebox.showinfo("Успех!",
+                                    f"Код сгенерирован и сохранен!\n\nЛогин: {user_login}\nКод: {generated_code}\nДоступ разрешен.")
+            except sqlite3.IntegrityError:
+                messagebox.showerror("Ошибка",
+                                     "Пользователь с таким логином уже существует!\nДоступ запрещен.")
+    else:
+        messagebox.showwarning("Предупреждение",
+                               "Вы не ввели все необходимые данные!")
+
+    root.destroy()
+
+
+verify_code()
+connection.close()
 
 
 def ensure_qt_app():
@@ -12,6 +97,7 @@ def ensure_qt_app():
         app = QtWidgets.QApplication(sys.argv)
     return app
 
+
 # Глобальные параметры и состояния
 cap = cv2.VideoCapture(0)
 left_counter = 0
@@ -19,8 +105,10 @@ right_counter = 0
 
 th_value = 5
 NO_EYES_MAX_FRAMES = 60      # сколько кадров без обнаружения глаз допустимо
+NO_BLINK_MAX_FRAMES = 60     # сколько кадров без обнаружения моргания
 warning_shown = False         # не показываем повторно одно и то же окно
 no_eyes_frames = 0              # счетчик кадров без обнаружения глаз
+no_blink_frames = 0              # счетчик кадров без моргания
 
 # Флаг уведомления, что пользователь закрыл окно
 warning_closed_by_user = False
@@ -29,7 +117,8 @@ warning_closed_by_user = False
 GIVEUP_AFTER_FRAMES = 100        # кадров после предупреждения до выхода
 giveup_frames = 0                  # счетчик кадров после предупреждения
 
-# Иммутабельная функция показа окна предупреждения (в отдельном потоке)
+
+# Иммутабельная функция показа окна предупреждения
 def show_warning_window_pyqt(message):
     app = ensure_qt_app()
 
@@ -62,16 +151,17 @@ def show_warning_window_pyqt(message):
         app.processEvents()
         time.sleep(0.01)
 
+
 # Запуск предупреждения в отдельном потоке
 def trigger_warning_async():
     threading.Thread(target=show_warning_window_pyqt, args=("У вас закрыты глаза!",), daemon=True).start()
 
-# Визуальная подпись на кадре (опционально)
 
-
+# Визуальная подпись на кадре
 def debug_show_warning_text(frame, text):
     cv2.putText(frame, text, (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
 
 # Главный цикл
 while True:
@@ -126,6 +216,12 @@ while True:
         else:
             no_eyes_frames += 1
 
+        # Логика обнаружения моргания
+        if no_eyes_frames != 0:
+            no_blink_frames = 0
+        else:
+            no_blink_frames += 1
+
         # Флаг предупреждения
         def thresholding(value):
             global left_counter, right_counter, no_eyes_frames
@@ -142,14 +238,12 @@ while True:
                     right_counter = 0
                     no_eyes_frames = 0
 
-        # Предупреждение, если глаз не найден
+
         if no_eyes_frames > NO_EYES_MAX_FRAMES:
             if not warning_shown:
-                # Запускаем PyQt окно предупреждения в отдельном потоке
                 trigger_warning_async()
                 warning_shown = True
                 giveup_frames = 0  # начать отсчет после показа предупреждения
-
             debug_show_warning_text(frame, "У вас закрыты глаза!")
 
             # Если предупреждение было закрыто пользователем — можно сбросить флаги и продолжать
@@ -163,6 +257,25 @@ while True:
                 giveup_frames += 1
                 if giveup_frames > GIVEUP_AFTER_FRAMES:
                     print("Водитель спит!")
+                    break
+
+        # Если водитель не моргает
+        if no_blink_frames > NO_BLINK_MAX_FRAMES:
+            if not warning_shown:
+                trigger_warning_async()
+                warning_shown = True
+                giveup_frames = 0
+            debug_show_warning_text(frame, "Вы не моргаете!")
+
+            if warning_closed_by_user:
+                warning_closed_by_user = False
+                warning_shown = False
+                giveup_frames = 0
+
+            else:
+                giveup_frames += 1
+                if giveup_frames > GIVEUP_AFTER_FRAMES:
+                    print("Водитель не живой организм!!")  # или другой текст по вашему выбору
                     break
 
         # Рендер
