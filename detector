@@ -44,12 +44,12 @@ def verify_code():
     generated_code = generate_code()
     print("Ваш код:", generated_code)
 
-    user_code = simpledialog.askstring("Ввод кода",
-                                         "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
+user_login = simpledialog.askstring("Ввод логина",
+                                         "Введите ваш логин:",
                                          parent=root)
 
-    user_login = simpledialog.askstring("Ввод логина",
-                                         "Введите ваш логин:",
+user_code = simpledialog.askstring("Ввод кода",
+                                         "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
                                          parent=root)
 
     if user_code and user_login:
