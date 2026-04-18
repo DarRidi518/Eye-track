@@ -31,7 +31,8 @@ cursor = connection.cursor()
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     login TEXT PRIMARY KEY,
-    hash TEXT
+    password_hash TEXT
+    code_hash TEXT
 )
 ''')
 
@@ -43,37 +44,56 @@ def verify_code():
 
     generated_code = generate_code()
     print("Ваш код:", generated_code)
+    generated_code_hash = hashlib.sha256(generated_code.encode()).hexdigest()
+    cursor.execute("INSERT INTO users (code_hash) VALUES (?)", generated_code_hash)
 
-user_login = simpledialog.askstring("Ввод логина",
-                                         "Введите ваш логин:",
-                                         parent=root)
+    user_login = simpledialog.askstring("Ввод логина",
+                                        "Введите ваш логин:",
+                                        parent=root)
 
-user_code = simpledialog.askstring("Ввод кода",
-                                         "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
-                                         parent=root)
+    user_password = simpledialog.askstring("Ввод пароля",
+                                           "Введите ваш пароль",
+                                           parent=root)
 
-    if user_code and user_login:
-        # Хэшируем код пользователя
-        user_code_hash = hashlib.sha256(user_code.encode()).hexdigest()
+    if user_password and user_login:
+        # Хэшируем пароль пользователя
+        user_password_hash = hashlib.sha256(user_password.encode()).hexdigest()
 
         # Проверяем, существует ли пользователь
-        cursor.execute("SELECT hash FROM users WHERE login = ?", (user_login,))
+        cursor.execute("SELECT password_hash FROM users WHERE login = ?", (user_login,))
         result = cursor.fetchone()
 
         if result:
-            # Если пользователь уже существует, проверяем хэш кода
-            stored_code_hash = result[0]
-            if user_code_hash == stored_code_hash:  # Сравниваем хэши
+            # Если пользователь уже существует, проверяем хэш пароля
+            stored_password_hash = result[0]
+            if user_password_hash == stored_password_hash:  # Сравниваем хэши
                 messagebox.showinfo("Успех!",
-                                    f"Код верный!\n\nЛогин: {user_login}\nДоступ разрешен.")
+                                    f"Пароль верный!\n\nЛогин: {user_login}\nДоступ разрешен.")
             else:
                 messagebox.showerror("Ошибка",
-                                     "Неверный код подтверждения!\nДоступ запрещен.")
+                                     "Неверный пароль!\nДоступ запрещен.")
         else:
             # Если пользователь не существует, добавляем его
-            code_hash = hashlib.sha256(generated_code.encode()).hexdigest()
+            user_code = simpledialog.askstring("Ввод кода",
+                                               "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
+                                               parent=root)
+
+            if user_code:
+                user_code_hash = hashlib.sha256(user_code.encode()).hexdigest()
+                cursor.execute("SELECT code_hash FROM codes")
+                result = cursor.fetchone()
+
+                if result:
+                    stored_code_hash = result[0]
+                    if user_code_hash == stored_code_hash:
+                        messagebox.showinfo("Успех!",
+                                            f"Код есть в базе данных!\n\nЛогин: {user_login}\nДоступ разрешен.")
+                    else:
+                        messagebox.showinfo("Ошибка.",
+                                            f"Кода нет в базе данных!\nДоступ запрещен.")
             try:
-                cursor.execute("INSERT INTO users (login, hash) VALUES (?, ?)", (user_login, code_hash))
+                user_password_hash = hashlib.sha256(user_password.encode()).hexdigest()
+                cursor.execute("INSERT INTO users (login, password_hash) VALUES (?, ?)", (user_login, user_password_hash))
                 connection.commit()
                 messagebox.showinfo("Успех!",
                                     f"Код сгенерирован и сохранен!\n\nЛогин: {user_login}\nКод: {generated_code}\nДоступ разрешен.")
@@ -217,7 +237,7 @@ while True:
             no_eyes_frames += 1
 
         # Логика обнаружения моргания
-        if no_eyes_frames != 0:
+        if detected is None and len(detected) > 0:
             no_blink_frames = 0
         else:
             no_blink_frames += 1
@@ -244,7 +264,7 @@ while True:
                 trigger_warning_async()
                 warning_shown = True
                 giveup_frames = 0  # начать отсчет после показа предупреждения
-            debug_show_warning_text(frame, "У вас закрыты глаза!")
+            debug_show_warning_text(frame, "Вы не подаете признаков жизни!")
 
             # Если предупреждение было закрыто пользователем — можно сбросить флаги и продолжать
             if warning_closed_by_user:
@@ -265,7 +285,7 @@ while True:
                 trigger_warning_async()
                 warning_shown = True
                 giveup_frames = 0
-            debug_show_warning_text(frame, "Вы не моргаете!")
+            debug_show_warning_text(frame, "Вы не подаете признаков жизни!")
 
             if warning_closed_by_user:
                 warning_closed_by_user = False
@@ -275,7 +295,7 @@ while True:
             else:
                 giveup_frames += 1
                 if giveup_frames > GIVEUP_AFTER_FRAMES:
-                    print("Водитель не живой организм!!")  # или другой текст по вашему выбору
+                    print("Водитель не живой организм!!")
                     break
 
         # Рендер
