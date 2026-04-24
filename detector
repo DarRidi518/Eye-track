@@ -15,13 +15,25 @@ from tkinter import simpledialog, messagebox
 # Функция для генерации 16-ти значного кода
 def generate_code():
     characters = string.digits + string.ascii_uppercase
-
     blocks = []
     for _ in range(4):
         block = ''.join(random.choices(characters, k=4))
         blocks.append(block)
-
     return '-'.join(blocks)
+
+
+# Функция для проверки сложности пароля
+def is_password_valid(password):
+    """Проверяет, соответствует ли пароль требованиям безопасности"""
+    if len(password) < 6:
+        return False, "Пароль должен содержать минимум 6 символов"
+    if not any(c.isupper() for c in password):
+        return False, "Пароль должен содержать хотя бы одну заглавную букву"
+    if not any(c.islower() for c in password):
+        return False, "Пароль должен содержать хотя бы одну строчную букву"
+    if not any(c.isdigit() for c in password):
+        return False, "Пароль должен содержать хотя бы одну цифру"
+    return True, "Пароль принят"
 
 
 # База данных
@@ -31,84 +43,126 @@ cursor = connection.cursor()
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS users (
     login TEXT PRIMARY KEY,
-    password_hash TEXT
+    password_hash TEXT,
     code_hash TEXT
 )
 ''')
+connection.commit()
 
 
-# Проверка пользователя
-def verify_code():
+# Функция для проверки пользователя
+def verify_user():
     root = tk.Tk()
     root.withdraw()
 
-    generated_code = generate_code()
-    print("Ваш код:", generated_code)
-    generated_code_hash = hashlib.sha256(generated_code.encode()).hexdigest()
-    cursor.execute("INSERT INTO users (code_hash) VALUES (?)", generated_code_hash)
-
-    user_login = simpledialog.askstring("Ввод логина",
+    user_login = simpledialog.askstring("Вход/Регистрация",
                                         "Введите ваш логин:",
                                         parent=root)
 
-    user_password = simpledialog.askstring("Ввод пароля",
-                                           "Введите ваш пароль",
-                                           parent=root)
+    if not user_login:
+        messagebox.showwarning("Предупреждение", "Логин не может быть пустым!")
+        root.destroy()
+        return False
 
-    if user_password and user_login:
-        # Хэшируем пароль пользователя
+    cursor.execute("SELECT password_hash, code_hash FROM users WHERE login = ?", (user_login,))
+    result = cursor.fetchone()
+
+    if result:
+        stored_password_hash, stored_code_hash = result
+
+        user_password = simpledialog.askstring("Вход",
+                                               "Введите ваш пароль:",
+                                               parent=root,
+                                               show='*')
+
+        if not user_password:
+            messagebox.showwarning("Предупреждение", "Пароль не может быть пустым!")
+            root.destroy()
+            return False
+
         user_password_hash = hashlib.sha256(user_password.encode()).hexdigest()
 
-        # Проверяем, существует ли пользователь
-        cursor.execute("SELECT password_hash FROM users WHERE login = ?", (user_login,))
-        result = cursor.fetchone()
-
-        if result:
-            # Если пользователь уже существует, проверяем хэш пароля
-            stored_password_hash = result[0]
-            if user_password_hash == stored_password_hash:  # Сравниваем хэши
-                messagebox.showinfo("Успех!",
-                                    f"Пароль верный!\n\nЛогин: {user_login}\nДоступ разрешен.")
-            else:
-                messagebox.showerror("Ошибка",
-                                     "Неверный пароль!\nДоступ запрещен.")
+        if user_password_hash == stored_password_hash:
+            messagebox.showinfo("Успех!", f"Добро пожаловать, {user_login}!\nДоступ разрешен.")
+            root.destroy()
+            return True
         else:
-            # Если пользователь не существует, добавляем его
-            user_code = simpledialog.askstring("Ввод кода",
+            messagebox.showerror("Ошибка", "Неверный пароль!\nДоступ запрещен.")
+            root.destroy()
+            return False
+
+    else:
+        messagebox.showinfo("Регистрация", f"Логин '{user_login}' свободен!\nДавайте создадим аккаунт.")
+
+        while True:
+            user_password = simpledialog.askstring("Регистрация - Пароль",
+                                                   "Придумайте пароль:\n(мин. 6 символов, заглавные, строчные, цифры)",
+                                                   parent=root,
+                                                   show='*')
+
+            if not user_password:
+                messagebox.showwarning("Предупреждение", "Пароль не может быть пустым!")
+                root.destroy()
+                return False
+
+            is_valid, message = is_password_valid(user_password)
+            if is_valid:
+                confirm_password = simpledialog.askstring("Регистрация - Подтверждение",
+                                                          "Повторите пароль:",
+                                                          parent=root,
+                                                          show='*')
+                if user_password == confirm_password:
+                    messagebox.showinfo("Успех", message)
+                    break
+                else:
+                    messagebox.showerror("Ошибка", "Пароли не совпадают!\nПопробуйте снова.")
+            else:
+                messagebox.showerror("Ошибка", message)
+
+        generated_code = generate_code()
+        generated_code_hash = hashlib.sha256(generated_code.encode()).hexdigest()
+        print("Ваш код:", generated_code)
+
+        while True:
+            user_code = simpledialog.askstring("Регистрация - Код",
                                                "Введите 16-значный код\n(формат XXXX-XXXX-XXXX-XXXX):",
                                                parent=root)
 
-            if user_code:
-                user_code_hash = hashlib.sha256(user_code.encode()).hexdigest()
-                cursor.execute("SELECT code_hash FROM codes")
-                result = cursor.fetchone()
+            if not user_code:
+                messagebox.showwarning("Предупреждение", "Код не может быть пустым!")
+                continue
 
-                if result:
-                    stored_code_hash = result[0]
-                    if user_code_hash == stored_code_hash:
-                        messagebox.showinfo("Успех!",
-                                            f"Код есть в базе данных!\n\nЛогин: {user_login}\nДоступ разрешен.")
-                    else:
-                        messagebox.showinfo("Ошибка.",
-                                            f"Кода нет в базе данных!\nДоступ запрещен.")
-            try:
-                user_password_hash = hashlib.sha256(user_password.encode()).hexdigest()
-                cursor.execute("INSERT INTO users (login, password_hash) VALUES (?, ?)", (user_login, user_password_hash))
-                connection.commit()
-                messagebox.showinfo("Успех!",
-                                    f"Код сгенерирован и сохранен!\n\nЛогин: {user_login}\nКод: {generated_code}\nДоступ разрешен.")
-            except sqlite3.IntegrityError:
+            user_code_normalized = user_code.strip().upper()
+            user_code_hash = hashlib.sha256(user_code_normalized.encode()).hexdigest()
+
+            if user_code_hash == generated_code_hash:
+                messagebox.showinfo("Успех!", "Код верный!")
+                break
+            else:
                 messagebox.showerror("Ошибка",
-                                     "Пользователь с таким логином уже существует!\nДоступ запрещен.")
-    else:
-        messagebox.showwarning("Предупреждение",
-                               "Вы не ввели все необходимые данные!")
+                                     f"Код не совпадает!\n\n"
+                                     f"Ваш код: {generated_code}\n"
+                                     f"Вы ввели: {user_code_normalized}")
 
-    root.destroy()
+        try:
+            user_password_hash = hashlib.sha256(user_password.encode()).hexdigest()
+            cursor.execute("INSERT INTO users (login, password_hash, code_hash) VALUES (?, ?, ?)",
+                           (user_login, user_password_hash, generated_code_hash))
+            connection.commit()
+            messagebox.showinfo("Регистрация завершена!",
+                                f"Поздравляем, {user_login}!\n\n"
+                                f"Аккаунт успешно создан.\n\n"
+                                f"Сохраните код в надежном месте!")
+            root.destroy()
+            return True
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Ошибка", "Произошла ошибка при создании аккаунта!")
+            root.destroy()
+            return False
 
 
-verify_code()
-connection.close()
+# Вызываем функцию проверки пользователя
+verify_user()
 
 
 def ensure_qt_app():
@@ -124,18 +178,34 @@ left_counter = 0
 right_counter = 0
 
 th_value = 5
-NO_EYES_MAX_FRAMES = 60      # сколько кадров без обнаружения глаз допустимо
-NO_BLINK_MAX_FRAMES = 60     # сколько кадров без обнаружения моргания
-warning_shown = False         # не показываем повторно одно и то же окно
-no_eyes_frames = 0              # счетчик кадров без обнаружения глаз
-no_blink_frames = 0              # счетчик кадров без моргания
+NO_EYES_MAX_FRAMES = 60  # сколько кадров без обнаружения глаз допустимо
+NO_BLINK_MAX_FRAMES = 60  # сколько кадров без обнаружения моргания
+warning_shown = False  # не показываем повторно одно и то же окно
+no_eyes_frames = 0  # счетчик кадров без обнаружения глаз
+no_blink_frames = 0  # счетчик кадров без моргания
 
 # Флаг уведомления, что пользователь закрыл окно
 warning_closed_by_user = False
 
-# Управление завершением программы, если предупреждение проигнорировано
-GIVEUP_AFTER_FRAMES = 100        # кадров после предупреждения до выхода
-giveup_frames = 0                  # счетчик кадров после предупреждения
+GIVEUP_AFTER_FRAMES = 100  # кадров после предупреждения до выхода
+giveup_frames = 0  # счетчик кадров после предупреждения
+
+
+# Функция для thresholding (вынесена из цикла)
+def thresholding(value):
+    global left_counter, right_counter, no_eyes_frames
+    if (value <= 54):
+        left_counter += 1
+        if (left_counter > th_value):
+            print('RIGHT')
+            left_counter = 0
+            no_eyes_frames = 0
+    elif (value >= 54):
+        right_counter += 1
+        if (right_counter > th_value):
+            print('LEFT')
+            right_counter = 0
+            no_eyes_frames = 0
 
 
 # Иммутабельная функция показа окна предупреждения
@@ -231,33 +301,16 @@ while True:
                     thresholding(cx)
 
         # Логика отсутствия глаз
-        if not (detected is None) and len(detected) > 0:
+        if detected is not None and len(detected) > 0:
             no_eyes_frames = 0
         else:
             no_eyes_frames += 1
 
         # Логика обнаружения моргания
-        if detected is None and len(detected) > 0:
+        if detected is not None and len(detected) > 0:
             no_blink_frames = 0
         else:
             no_blink_frames += 1
-
-        # Флаг предупреждения
-        def thresholding(value):
-            global left_counter, right_counter, no_eyes_frames
-            if (value <= 54):
-                left_counter += 1
-                if (left_counter > th_value):
-                    print('RIGHT')
-                    left_counter = 0
-                    no_eyes_frames = 0
-            elif (value >= 54):
-                right_counter += 1
-                if (right_counter > th_value):
-                    print('LEFT')
-                    right_counter = 0
-                    no_eyes_frames = 0
-
 
         if no_eyes_frames > NO_EYES_MAX_FRAMES:
             if not warning_shown:
@@ -272,7 +325,7 @@ while True:
                 warning_shown = False
                 giveup_frames = 0
 
-            # Логика “сдать” по времени игнорирования
+            # Логика "сдать" по времени игнорирования
             else:
                 giveup_frames += 1
                 if giveup_frames > GIVEUP_AFTER_FRAMES:
@@ -307,3 +360,4 @@ while True:
 
 cap.release()
 cv2.destroyAllWindows()
+connection.close()
